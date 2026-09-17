@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
@@ -14,13 +16,27 @@ import (
 
 const fakeRelayAdminToken = "test-admin-token"
 
+// hashFakeToken mirrors internal/relay/auth.go's unexported hashToken
+// (SHA-256, hex-encoded) — this package can't import it directly since
+// it's a different module, so the fixture reproduces the same
+// convention to talk to the real Store directly, same as the relay
+// module's own tests do.
+func hashFakeToken(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
 // newFakeRelayServer builds a real internal/relay.Server (real SQLite
 // store in a temp file, real dedup/session/capability/negotiation logic —
-// not a hand-rolled mock) with one pre-registered client. It returns the
-// server (callers wrap server.Handler() in an httptest.Server themselves,
-// optionally through a fault-injecting layer like delayingHandler) and the
-// client's raw API key.
-func newFakeRelayServer(t *testing.T) (server *relay.Server, apiKey string) {
+// not a hand-rolled mock), pairs one client ("client-1") via the same
+// pairing-link + Ed25519 flow a real device would go through, and mints
+// it a device session token directly against the store (skipping the
+// HTTP challenge/response round trip, which the relay module's own
+// tests already cover). It returns the server (callers wrap
+// server.Handler() in an httptest.Server themselves, optionally
+// through a fault-injecting layer like delayingHandler) and the
+// client's device session token.
+func newFakeRelayServer(t *testing.T) (server *relay.Server, sessionToken string) {
 	t.Helper()
 	store, err := relay.NewSQLiteStore(filepath.Join(t.TempDir(), "relay.sqlite"))
 	if err != nil {
@@ -28,9 +44,21 @@ func newFakeRelayServer(t *testing.T) (server *relay.Server, apiKey string) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	const rawKey = "test-raw-api-key"
-	sum := sha256.Sum256([]byte(rawKey))
-	if _, err := store.CreateClient(context.Background(), "client-1", "Test Client", hex.EncodeToString(sum[:])); err != nil {
+	ctx := context.Background()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pairingToken = "test-pairing-token"
+	if _, err := store.CreatePairingLink(ctx, hashFakeToken(pairingToken), "Test Client", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ConsumePairingLink(ctx, hashFakeToken(pairingToken), "client-1", pub); err != nil {
+		t.Fatal(err)
+	}
+
+	const rawSessionToken = "test-device-session-token"
+	if _, err := store.CreateDeviceSession(ctx, hashFakeToken(rawSessionToken), "client-1", time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -38,7 +66,7 @@ func newFakeRelayServer(t *testing.T) (server *relay.Server, apiKey string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return server, rawKey
+	return server, rawSessionToken
 }
 
 // delayingHandler wraps h, sleeping delay() before forwarding every
