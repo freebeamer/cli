@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -71,7 +72,7 @@ func mapsSet(args []string, stdout, stderr io.Writer) error {
 	if err := image.SaveAs(*output); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "requested: %g\nencoded:   %g\nraw:       %d\noffset:    0x%X\noutput:    %s\n", result.Requested, result.Actual, result.Raw, result.Offset, *output)
+	fmt.Fprintf(stdout, "requested: %g\nencoded:   %g\nraw:       %s\noffset:    0x%X\noutput:    %s\n", result.Requested, result.Actual, formatRaw(result.Raw), result.Offset, *output)
 	return nil
 }
 
@@ -119,10 +120,10 @@ func mapsShow(args []string, stdout, stderr io.Writer) error {
 		columns = len(decoded.Z[0])
 	}
 	fmt.Fprintf(stdout, "Dimensions: %dx%d\n", rows, columns)
-	fmt.Fprintf(stdout, "X raw: %v\nX decoded: %v\nY raw: %v\nY decoded: %v\n", decoded.Raw.X, decoded.X, decoded.Raw.Y, decoded.Y)
+	fmt.Fprintf(stdout, "X raw: %v\nX decoded: %v\nY raw: %v\nY decoded: %v\n", formatRawList(decoded.Raw.X), decoded.X, formatRawList(decoded.Raw.Y), decoded.Y)
 	fmt.Fprintln(stdout, "Z raw:")
 	for _, row := range decoded.Raw.Z {
-		fmt.Fprintln(stdout, row)
+		fmt.Fprintln(stdout, formatRawList(row))
 	}
 	fmt.Fprintln(stdout, "Z decoded:")
 	for _, row := range decoded.Z {
@@ -174,4 +175,19 @@ func mapsList(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(writer, "%d\t%s\t%s\n", index, strings.Join(categories, ", "), parameter.Name)
 	}
 	return writer.Flush()
+}
+
+// formatRaw prints a stored raw value without exponent notation, so an
+// integer raw reads exactly as the stored integer (16909060, not
+// 1.690906e+07) and a float32/float64 raw prints its shortest exact form.
+func formatRaw(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
+}
+
+func formatRawList(values []float64) string {
+	formatted := make([]string, len(values))
+	for i, value := range values {
+		formatted[i] = formatRaw(value)
+	}
+	return "[" + strings.Join(formatted, " ") + "]"
 }
