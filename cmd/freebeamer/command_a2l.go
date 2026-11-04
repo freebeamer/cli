@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 
@@ -39,18 +40,21 @@ func a2lInfo(args []string, stdout io.Writer) error {
 }
 
 func a2lConvert(args []string, stdout, stderr io.Writer) error {
-	_ = stderr
-	if len(args) != 3 {
-		return errors.New("usage: freebeamer a2l convert A2L --output DEFINITION.mapdef")
+	set := flag.NewFlagSet("a2l convert", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	output := set.String("output", "", "output .mapdef path (must not exist)")
+	author := set.String("author", "", "record this author in provenance")
+	license := set.String("license", "", "record this licence in provenance (e.g. an SPDX id, or unknown)")
+	sourceURL := set.String("source-url", "", "record where the source came from in provenance")
+	input, rest := leadingPositional(args)
+	if err := set.Parse(rest); err != nil {
+		return err
 	}
-	input, output := args[0], ""
-	if args[1] == "--output" {
-		output = args[2]
-	} else if args[0] == "--output" {
-		output, input = args[1], args[2]
+	if input == "" {
+		input = set.Arg(0)
 	}
-	if input == "" || output == "" {
-		return errors.New("usage: freebeamer a2l convert A2L --output DEFINITION.mapdef")
+	if input == "" || *output == "" {
+		return errors.New("usage: freebeamer a2l convert A2L --output DEFINITION.mapdef [--author NAME] [--license SPDX] [--source-url URL]")
 	}
 	definition, err := a2l.Load(input)
 	if err != nil {
@@ -60,9 +64,10 @@ func a2lConvert(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := mapdef.Save(output, document); err != nil {
+	applyProvenanceFlags(&document.Provenance, *author, *license, *sourceURL)
+	if err := mapdef.Save(*output, document); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Converted %d parameters.\nOutput: %s\n", len(document.Parameters), output)
+	fmt.Fprintf(stdout, "Converted %d parameters.\nOutput: %s\n", len(document.Parameters), *output)
 	return nil
 }
