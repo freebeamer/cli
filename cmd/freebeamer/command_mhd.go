@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -15,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/freebeamer/core/pkg/doip"
+	"github.com/freebeamer/core/pkg/enet"
 	"github.com/freebeamer/core/pkg/mhd"
 	"github.com/freebeamer/core/pkg/telemetry"
 )
@@ -56,6 +57,9 @@ func mhdMonitor(args []string, stdout, stderr io.Writer) error {
 	targetOverride := set.String("target", "", "diagnostic target override (decimal or 0x-prefixed; requires vehicle evidence)")
 	capturePath := set.String("capture-file", "", "new private JSONL file for raw monitor replies and request timing")
 	source := set.Uint("source", 0x0E00, "this client's own DoIP logical source address")
+	protocolFlag := set.String("protocol", "auto", "diagnostic protocol: auto (detect), hsfz (BMW F-series ENET, port 6801) or doip (ISO 13400)")
+	hsfzSource := set.Uint("hsfz-source", 0xF4, "this client's own HSFZ tester address")
+	noScan := set.Bool("no-scan", false, "only try the given/default port; don't fall back to scanning the adapter's other ports")
 	dialTimeout := set.Duration("dial-timeout", 2*time.Second, "TCP dial timeout")
 	requestTimeout := set.Duration("timeout", time.Second, "per-request timeout")
 	interval := set.Duration("interval", 100*time.Millisecond, "delay between samples")
@@ -73,11 +77,18 @@ func mhdMonitor(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if set.NArg() != 1 {
-		return errors.New("usage: freebeamer mhd monitor [--target ADDR] [--capture-file PATH] [--source ADDR] [--timeout DURATION] [--interval DURATION] [--count N] [--upload-endpoint URL] [--api-key KEY] [--buffer-file PATH] [--queue-capacity N] [--buffer-max-bytes N] [--on-spool-full drop|stop] [--status-interval DURATION] [--drain-timeout DURATION] [--device-id ID] HOST[:PORT]")
+		return errors.New("usage: freebeamer mhd monitor [--target ADDR] [--capture-file PATH] [--source ADDR] [--protocol auto|hsfz|doip] [--hsfz-source ADDR] [--no-scan] [--timeout DURATION] [--interval DURATION] [--count N] [--upload-endpoint URL] [--api-key KEY] [--buffer-file PATH] [--queue-capacity N] [--buffer-max-bytes N] [--on-spool-full drop|stop] [--status-interval DURATION] [--drain-timeout DURATION] [--device-id ID] HOST[:PORT]")
 	}
 
 	if *source > 0xffff {
 		return errors.New("mhd monitor: source must fit a 16-bit address")
+	}
+	if *hsfzSource > 0xff {
+		return errors.New("mhd monitor: --hsfz-source must fit one byte")
+	}
+	protocol, err := enet.ParseProtocol(*protocolFlag)
+	if err != nil {
+		return fmt.Errorf("mhd monitor: %w", err)
 	}
 	if *dialTimeout <= 0 || *requestTimeout <= 0 || *interval < 0 || *count < 0 {
 		return errors.New("mhd monitor: timeouts must be positive; interval and count must be non-negative")
@@ -107,9 +118,9 @@ func mhdMonitor(args []string, stdout, stderr io.Writer) error {
 		capture = json.NewEncoder(file)
 	}
 
-	address := set.Arg(0)
-	if !strings.Contains(address, ":") {
-		address = fmt.Sprintf("%s:%d", address, doip.DefaultTCPPort)
+	host, port, err := splitAdapterAddress(set.Arg(0))
+	if err != nil {
+		return fmt.Errorf("mhd monitor: %w", err)
 	}
 
 	destinationID := telemetry.DestinationID(*uploadEndpoint, *apiKey)
@@ -138,24 +149,33 @@ func mhdMonitor(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	client, err := doip.Dial(address, *dialTimeout)
+	connectOptions := enet.Options{
+		Port:         port,
+		Protocol:     protocol,
+		DoIPSource:   uint16(*source),
+		HSFZSource:   byte(*hsfzSource),
+		DialTimeout:  *dialTimeout,
+		ProbeTimeout: *requestTimeout,
+		NoScan:       *noScan,
+		Log:          func(line string) { fmt.Fprintln(stderr, "mhd monitor: "+line) },
+	}
+	if *targetOverride != "" {
+		override := uint16(diagnosticTarget)
+		connectOptions.Target = &override
+	}
+	client, err := enet.Connect(context.Background(), host, connectOptions)
 	if err != nil {
-		return err
+		return fmt.Errorf("mhd monitor: %w", err)
 	}
 	defer client.Close()
 
-	target, err := client.Activate(uint16(*source), doip.ActivationDefault, *requestTimeout)
-	if err != nil {
-		return fmt.Errorf("mhd monitor: routing activation: %w", err)
+	responder, target := client.Responder, client.Target
+	if client.Scanned {
+		fmt.Fprintf(stderr, "mhd monitor: adapter found by fallback scan on port %d; pass HOST:%d next time to skip the scan\n", client.Port, client.Port)
 	}
-	responder := target
-	if *targetOverride != "" {
-		target = uint16(diagnosticTarget)
-		client.SetTargetAddress(target)
-	}
-	fmt.Fprintf(stderr, "mhd monitor: routing activation responder 0x%04X, diagnostic target 0x%04X (vehicle compatibility unverified)\n", responder, target)
+	fmt.Fprintf(stderr, "mhd monitor: %s on port %d, diagnostic target 0x%04X (vehicle compatibility unverified)\n", client.Protocol, client.Port, target)
 	if capture != nil {
-		if err := capture.Encode(map[string]any{"type": "routing", "format_version": 1, "timestamp": time.Now().UTC(), "source": *source, "responder": responder, "target": target, "target_override": *targetOverride != ""}); err != nil {
+		if err := capture.Encode(map[string]any{"type": "routing", "format_version": 1, "timestamp": time.Now().UTC(), "protocol": string(client.Protocol), "port": client.Port, "source": *source, "responder": responder, "target": target, "target_override": *targetOverride != ""}); err != nil {
 			return fmt.Errorf("mhd monitor: capture: %w", err)
 		}
 	}
@@ -361,4 +381,22 @@ func defaultDeviceID() string {
 		return ""
 	}
 	return hostname
+}
+
+// splitAdapterAddress accepts HOST or HOST:PORT. Without a port the
+// default (6801, HSFZ) is used, and enet.Connect falls back to scanning
+// if nothing answers there.
+func splitAdapterAddress(address string) (host string, port int, err error) {
+	if !strings.Contains(address, ":") {
+		return address, enet.DefaultPort, nil
+	}
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", 0, err
+	}
+	port, err = strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return "", 0, fmt.Errorf("invalid port %q (want 1-65535)", portText)
+	}
+	return host, port, nil
 }
