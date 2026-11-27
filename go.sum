@@ -6,6 +6,8 @@ github.com/freebeamer/core v0.1.0-alpha.6 h1:sZ89+rYgPqd0Ztx0oX4KXkeDOP5cnlcKuSg
 github.com/freebeamer/core v0.1.0-alpha.6/go.mod h1:DZeGnYPB8R7/v4hv7Lcx3Zeb+a4lwCXzPgeiw5YYkIg=
 github.com/freebeamer/core v0.1.0-alpha.7 h1:JN/gTjWSswYzr8mlJvhnvVa2H/dGQrCYyAPvsevr65U=
 github.com/freebeamer/core v0.1.0-alpha.7/go.mod h1:DZeGnYPB8R7/v4hv7Lcx3Zeb+a4lwCXzPgeiw5YYkIg=
+github.com/freebeamer/core v0.1.0-alpha.7.0.20261127162937-95d81ed77143 h1:4YMVNgPTu2IsewTnAJHsrQG9n72CdE8NsnHPHZLXvC0=
+github.com/freebeamer/core v0.1.0-alpha.7.0.20261127162937-95d81ed77143/go.mod h1:DZeGnYPB8R7/v4hv7Lcx3Zeb+a4lwCXzPgeiw5YYkIg=
 github.com/freebeamer/relay v0.1.0-alpha.2 h1:Ih1U2BYMvSXgDBOav+hgzrFc+drqjkSdzKSf0mMl9Dc=
 github.com/freebeamer/relay v0.1.0-alpha.2/go.mod h1:F4tZAYpImDAHkdlv7zfcPnhp3eRXX5m6X7D8ilRcWto=
 github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 h1:LMLX+LgTNWpfvCBdFebv6EsYotImrt/Ppc5cXIriCSo=
